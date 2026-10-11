@@ -372,6 +372,11 @@ class TestGetProviderClass(unittest.TestCase):
         cls = get_provider_class("openai")
         self.assertEqual(cls, OpenAIProvider)
 
+    def test_get_nvidia_provider(self):
+        """Test NVIDIA uses the OpenAI-compatible provider."""
+        cls = get_provider_class("nvidia")
+        self.assertEqual(cls, OpenAIProvider)
+
     def test_get_glm_provider(self):
         """Test getting GLM provider class."""
         cls = get_provider_class("glm")

@@ -68,7 +68,7 @@ class TestClaudeCodeToolParity(unittest.TestCase):
         missing = [name for name in expected if self.registry.get(name) is None]
         self.assertEqual(missing, [])
 
-    def test_send_user_message_is_user_visible_fallback(self) -> None:
+    def test_send_user_message_is_returned_without_another_provider_call(self) -> None:
         conversation = Conversation()
         conversation.add_user_message("hi")
 
@@ -85,14 +85,7 @@ class TestClaudeCodeToolParity(unittest.TestCase):
             finish_reason="tool_use",
             tool_uses=[mock_tool_use],
         )
-        mock_response2 = ChatResponse(
-            content="",
-            model="test",
-            usage={"input_tokens": 1, "output_tokens": 1},
-            finish_reason="stop",
-            tool_uses=None,
-        )
-        mock_provider.chat.side_effect = [mock_response1, mock_response2]
+        mock_provider.chat.return_value = mock_response1
 
         out = run_agent_loop(
             conversation=conversation,
@@ -102,6 +95,8 @@ class TestClaudeCodeToolParity(unittest.TestCase):
             verbose=False,
         )
         self.assertEqual(out.response_text, "hello")
+        mock_provider.chat.assert_called_once()
+        self.assertEqual(conversation.messages[-1].content, "hello")
 
     def test_tool_search_select(self) -> None:
         out = self.registry.dispatch(
@@ -134,4 +129,3 @@ class TestClaudeCodeToolParity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

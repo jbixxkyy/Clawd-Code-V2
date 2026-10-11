@@ -299,6 +299,114 @@ class TestAgentLoop(unittest.TestCase):
         self.assertEqual(result.response_text, "Hello from fallback!")
         provider.chat.assert_called_once()
 
+    def test_agent_loop_stops_mid_stream_and_keeps_partial_text(self):
+        """should_stop aborts a streaming turn and preserves the partial reply."""
+        conversation = Conversation()
+        conversation.add_user_message("Say hello")
+
+        provider = MagicMock()
+        checks = {"count": 0}
+
+        def should_stop():
+            checks["count"] += 1
+            return checks["count"] >= 2
+
+        def stream_side_effect(messages, tools=None, on_text_chunk=None, **kwargs):
+            on_text_chunk("Hello ")
+            raise AssertionError("streaming should be aborted by the stop check")
+
+        provider.chat_stream_response.side_effect = stream_side_effect
+
+        chunks: list[str] = []
+        result = run_agent_loop(
+            conversation=conversation,
+            provider=provider,
+            tool_registry=self.registry,
+            tool_context=self.context,
+            stream=True,
+            verbose=False,
+            on_text_chunk=chunks.append,
+            should_stop=should_stop,
+        )
+
+        self.assertTrue(result.cancelled)
+        self.assertEqual(result.response_text, "Hello ")
+        self.assertEqual(chunks, ["Hello "])
+        provider.chat.assert_not_called()
+        self.assertEqual(conversation.messages[-1].role, "assistant")
+        self.assertEqual(conversation.messages[-1].content, "Hello ")
+
+    def test_agent_loop_stops_before_tool_execution(self):
+        """A stop between the model reply and tool execution skips the tools."""
+        conversation = Conversation()
+        conversation.add_user_message("Create a file hello.py with content print('hello world')")
+
+        provider = MagicMock()
+        provider.chat_stream_response.side_effect = NotImplementedError()
+        hello_path = self.workspace / "hello.py"
+        stopped = {"value": False}
+
+        def chat_side_effect(*args, **kwargs):
+            # The user presses stop while the model is replying.
+            stopped["value"] = True
+            return ChatResponse(
+                content="I will create the file.",
+                model="test-model",
+                usage={"input_tokens": 10, "output_tokens": 20},
+                finish_reason="tool_use",
+                tool_uses=[{
+                    "id": "toolu_123",
+                    "name": "Write",
+                    "input": {
+                        "file_path": str(hello_path),
+                        "content": "print('hello world')",
+                    },
+                }],
+            )
+
+        provider.chat.side_effect = chat_side_effect
+
+        result = run_agent_loop(
+            conversation=conversation,
+            provider=provider,
+            tool_registry=self.registry,
+            tool_context=self.context,
+            verbose=False,
+            should_stop=lambda: stopped["value"],
+        )
+
+        self.assertTrue(result.cancelled)
+        self.assertEqual(result.response_text, "")
+        self.assertEqual(provider.chat.call_count, 1)
+        self.assertFalse(hello_path.exists())
+        self.assertEqual(conversation.messages[-1].role, "assistant")
+
+    def test_agent_loop_without_should_stop_is_unchanged(self):
+        """The stop hook is optional and defaults to running to completion."""
+        conversation = Conversation()
+        conversation.add_user_message("Say hello")
+
+        provider = MagicMock()
+        provider.chat_stream_response.side_effect = NotImplementedError()
+        provider.chat.return_value = ChatResponse(
+            content="Hello!",
+            model="test-model",
+            usage={"input_tokens": 1, "output_tokens": 1},
+            finish_reason="stop",
+            tool_uses=None,
+        )
+
+        result = run_agent_loop(
+            conversation=conversation,
+            provider=provider,
+            tool_registry=self.registry,
+            tool_context=self.context,
+            verbose=False,
+        )
+
+        self.assertFalse(result.cancelled)
+        self.assertEqual(result.response_text, "Hello!")
+
 
 if __name__ == "__main__":
     unittest.main()

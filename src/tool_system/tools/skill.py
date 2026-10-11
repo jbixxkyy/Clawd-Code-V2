@@ -58,11 +58,10 @@ class SkillTool:
             normalized = normalized[1:]
 
         from ...skills.argument_substitution import substitute_arguments
-        from ...skills.loader import get_all_skills
+        from ...skills.loader import find_skill
 
         cwd = context.cwd or context.workspace_root
-        skills = get_all_skills(project_root=cwd)
-        skill = next((s for s in skills if s.name == normalized), None)
+        skill = find_skill(normalized, project_root=cwd)
         if skill is None:
             return ToolResult(
                 name="Skill",

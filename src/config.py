@@ -74,10 +74,33 @@ def load_config() -> dict[str, Any]:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
 
+        providers = config.setdefault("providers", {})
+        from src.providers import PROVIDER_INFO
+
+        needs_save = False
+        for provider_name, info in PROVIDER_INFO.items():
+            provider_config = providers.setdefault(provider_name, {})
+            if "api_key" not in provider_config:
+                provider_config["api_key"] = ""
+                needs_save = True
+            if "base_url" not in provider_config:
+                provider_config["base_url"] = info["default_base_url"]
+                needs_save = True
+            if "default_model" not in provider_config:
+                provider_config["default_model"] = info["default_model"]
+                needs_save = True
+
         # Decode API keys
-        for provider_name, provider_config in config.get("providers", {}).items():
+        for provider_name, provider_config in providers.items():
             if provider_config.get("api_key"):
                 provider_config["api_key"] = _decode_api_key(provider_config["api_key"])
+
+        if config.get("default_provider") is None:
+            config["default_provider"] = "anthropic"
+            needs_save = True
+
+        if needs_save:
+            save_config(config)
 
         return config
     except Exception as e:
@@ -120,7 +143,7 @@ def get_provider_config(provider: str) -> dict[str, Any]:
     """Get configuration for a specific provider.
 
     Args:
-        provider: Provider name (anthropic, openai, glm, minimax)
+        provider: Provider name (anthropic, openai, nvidia, glm, minimax)
 
     Returns:
         Provider configuration dictionary
@@ -139,7 +162,7 @@ def set_api_key(provider: str, api_key: str, base_url: Optional[str] = None,
     """Set API key for a provider.
 
     Args:
-        provider: Provider name (anthropic, openai, glm, minimax)
+        provider: Provider name (anthropic, openai, nvidia, glm, minimax)
         api_key: API key to set
         base_url: Optional base URL override
         default_model: Optional default model override

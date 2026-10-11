@@ -69,6 +69,14 @@ PROVIDER_INFO: dict[str, ProviderInfo] = {
             "gpt-3.5-turbo",
         ],
     },
+    "nvidia": {
+        "label": "NVIDIA NIM",
+        "default_base_url": "https://integrate.api.nvidia.com/v1",
+        "default_model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "available_models": [
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+        ],
+    },
     "glm": {
         "label": "Zhipu GLM (z.ai)",
         "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -123,6 +131,10 @@ def get_provider_class(provider_name: str):
 
         return AnthropicProvider
     if provider_name == "openai":
+        from .openai_provider import OpenAIProvider
+
+        return OpenAIProvider
+    if provider_name == "nvidia":
         from .openai_provider import OpenAIProvider
 
         return OpenAIProvider

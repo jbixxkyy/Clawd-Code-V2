@@ -33,3 +33,11 @@ def load_session(session_id: str, directory: Path | None = None) -> StoredSessio
         input_tokens=data['input_tokens'],
         output_tokens=data['output_tokens'],
     )
+
+
+def list_sessions(directory: Path | None = None) -> list[str]:
+    """Return a list of session IDs (filenames without .json) from the given directory."""
+    target_dir = directory or DEFAULT_SESSION_DIR
+    if not target_dir.exists():
+        return []
+    return [p.stem for p in target_dir.glob('*.json')]

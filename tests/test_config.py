@@ -58,12 +58,36 @@ class TestDefaultConfig(unittest.TestCase):
         self.assertIn("providers", config)
         self.assertIn("anthropic", config["providers"])
         self.assertIn("openai", config["providers"])
+        self.assertIn("nvidia", config["providers"])
+        self.assertNotIn("deepseek", config["providers"])
         self.assertIn("glm", config["providers"])
 
     def test_default_provider_is_anthropic(self):
         """Test that default provider is Anthropic."""
         config = get_default_config()
         self.assertEqual(config["default_provider"], "anthropic")
+
+    def test_load_config_adds_missing_provider_defaults(self):
+        """Test that missing providers get default config entries."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / ".clawd" / "config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(json.dumps({
+                "default_provider": "nvidia",
+                "providers": {
+                    "nvidia": {
+                        "api_key": "saved-key",
+                        "base_url": "https://integrate.api.nvidia.com/v1",
+                        "default_model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+                    }
+                },
+            }), encoding="utf-8")
+
+            with patch('src.config.get_config_path', return_value=config_path):
+                config = load_config()
+
+            self.assertIn("minimax", config["providers"])
+            self.assertNotIn("deepseek", config["providers"])
 
     def test_default_models(self):
         """Test default models for providers."""
@@ -77,8 +101,21 @@ class TestDefaultConfig(unittest.TestCase):
             "gpt-5.4"
         )
         self.assertEqual(
+            config["providers"]["nvidia"]["base_url"],
+            "https://integrate.api.nvidia.com/v1"
+        )
+        from src.providers import PROVIDER_INFO
+        self.assertEqual(
+            PROVIDER_INFO["nvidia"]["available_models"],
+            ["nvidia/nemotron-3.5-lightning-30b-a3b"],
+        )
+        self.assertEqual(
             config["providers"]["glm"]["default_model"],
             "zai/glm-5"
+        )
+        self.assertEqual(
+            config["providers"]["nvidia"]["default_model"],
+            "nvidia/nemotron-3.5-lightning-30b-a3b"
         )
 
 

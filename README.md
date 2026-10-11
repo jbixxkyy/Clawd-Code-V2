@@ -123,10 +123,16 @@ Assistant: Hi! I'm Clawd Codex, a Python reimplementation...
 
 ```bash
 clawd              # Start REPL
+clawd web          # Start the browser UI for the current workspace
+clawd web --reload # Development mode: restart on Clawd source edits and refresh browsers
 clawd login        # Configure API
 clawd --version    # Check version
 clawd config       # View settings
 ```
+
+The optional browser UI uses the same provider, conversation, tool registry, project context, and permission checks as the CLI. Its workspace-style layout is inspired by Nova Code, while chat requests continue to run through Clawd's Python agent backend. Start it with `clawd web`, then open the printed address on this computer or the LAN address on a phone on the same Wi-Fi; no access token is required. **Warning:** the web app has no authentication and provides access to workspace files and agent tools to anyone who can reach its port. Run it only on a trusted, isolated network and do not expose the port to the internet. Saved chats appear in the **Sessions** sidebar and can be opened to continue the conversation; each chat stays bound to its working folder, and opening a saved chat switches the web app back to that folder. Chats run independently, so you can switch chats or start another one while a turn is still running. Use the **×** button beside a saved chat to delete it; a running chat must finish before it can be deleted. Use **New chat in another folder** to browse to or enter a starting folder, then optionally search that folder and its subfolders. Search ranks close matches first and returns up to 100 results after scanning at most 10,000 directories within the selected folder; inaccessible locations are skipped and reported. Existing chats keep their original folders. **New session** starts a fresh conversation in the selected folder. Older saved chats created before folder tracking use the folder from the current web app launch.
+
+When developing Clawd itself, use `clawd web --reload` instead. It watches Python files under `src/`, restarts the web server after edits settle, and automatically refreshes connected browser tabs. If a chat turn is active, the reload waits for it to finish. The reload watcher is for local source development; normal `clawd web` startup does not watch files.
 
 ***
 
@@ -193,6 +199,23 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
+#### Install the `clawd` command globally on Windows
+
+To run `clawd` from any project directory without activating this repository's virtual environment, install the checkout with `pipx`:
+
+```powershell
+py -m pip install --user pipx
+py -m pipx ensurepath
+```
+
+Restart PowerShell, then from the Clawd-Code directory run:
+
+```powershell
+pipx install --editable .
+```
+
+After installation, use `clawd login` once to configure a provider, then run `clawd` from the repository you want Clawd to work in.
+
 ### Configure
 
 #### Option 1: Interactive (Recommended)
@@ -203,7 +226,7 @@ python -m src.cli login
 
 This flow will:
 
-1. ask you to choose a provider: anthropic / openai / glm
+1. ask you to choose a provider: anthropic / openai / nvidia / glm / minimax
 2. ask for that provider's API key
 3. optionally save a custom base URL
 4. optionally save a default model
@@ -635,7 +658,7 @@ python -m src.cli login
 
 这个流程会：
 
-1. 让你选择 provider：anthropic / openai / glm
+1. 让你选择 provider：anthropic / openai / nvidia / glm / minimax
 2. 让你输入该 provider 的 API key
 3. 可选：保存自定义 base URL
 4. 可选：保存默认 model

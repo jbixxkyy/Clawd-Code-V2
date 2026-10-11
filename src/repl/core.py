@@ -110,7 +110,7 @@ class ClawdREPL:
         config = get_provider_config(provider_name)
         if not config.get("api_key"):
             self.console.print("[red]Error: API key not configured.[/red]")
-            self.console.print("Run [bold]clawd login[/bold] to configure.")
+            self.console.print("Run [bold]python -m src.cli login[/bold] to configure.")
             sys.exit(1)
 
         # Initialize provider

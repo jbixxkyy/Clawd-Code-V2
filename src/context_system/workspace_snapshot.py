@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .models import WorkspaceSnapshot
@@ -13,6 +14,13 @@ _IGNORED_NAMES = {
     "__pycache__",
     "node_modules",
 }
+
+# Hard budget for the file scan. A workspace such as a home folder holds
+# hundreds of thousands of files, and the snapshot is rebuilt on every model
+# turn, so traversal must stop on its own instead of walking the whole tree.
+_MAX_SCANNED_DIRS = 2_000
+_MAX_SCANNED_FILES = 20_000
+
 _KEY_FILE_CANDIDATES = (
     "README.md",
     "CLAUDE.md",
@@ -49,8 +57,7 @@ def build_workspace_snapshot(
             break
 
     key_files = tuple(name for name in _KEY_FILE_CANDIDATES if (root / name).exists())
-    python_file_count = sum(1 for path in root.rglob("*.py") if _is_countable(path))
-    test_file_count = sum(1 for path in root.rglob("test_*.py") if _is_countable(path))
+    python_file_count, test_file_count = _count_source_files(root)
 
     return WorkspaceSnapshot(
         workspace_root=root,
@@ -70,5 +77,31 @@ def _is_within(child: Path, parent: Path) -> bool:
         return False
 
 
-def _is_countable(path: Path) -> bool:
-    return path.is_file() and not any(part in _IGNORED_NAMES for part in path.parts)
+def _count_source_files(root: Path) -> tuple[int, int]:
+    """Count Python and test files under ``root``.
+
+    ``Path.rglob`` cannot prune subtrees: it still descends into every ignored
+    directory before the caller can drop the results, which took minutes when
+    the workspace was a home folder. A pruned ``os.walk`` with a hard budget
+    keeps the snapshot cheap no matter how large the workspace is.
+    """
+    python_files = 0
+    test_files = 0
+    visited_dirs = 0
+    visited_files = 0
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        visited_dirs += 1
+        dirnames[:] = [name for name in dirnames if name not in _IGNORED_NAMES]
+
+        for filename in filenames:
+            visited_files += 1
+            if filename.endswith(".py"):
+                python_files += 1
+                if filename.startswith("test_"):
+                    test_files += 1
+
+        if visited_dirs >= _MAX_SCANNED_DIRS or visited_files >= _MAX_SCANNED_FILES:
+            break
+
+    return python_files, test_files

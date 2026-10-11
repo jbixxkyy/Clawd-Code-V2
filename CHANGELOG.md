@@ -8,13 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Stop control in the browser chat: a ■ button replaces Send while a turn is running, cancelling the agent loop mid-stream or between tool calls via `POST /api/jobs/{id}/cancel`; partial replies are kept in the saved chat
+- Cooperative `should_stop` cancellation hook in the shared agent loop, with `AgentLoopCancelled` and an `AgentLoopResult.cancelled` flag
+- Compact model picker in the browser composer: clicking the model label opens a small model-only list to switch models without opening the full settings dialog
+- Nova Code-inspired workspace layout for the LAN browser UI, backed by Clawd's existing Python agent and tools
+- Browser workspace controls for browsing and switching project directories, plus starting a fresh session
+- Folder picker with an editable starting location and optional live, case-insensitive recursive search scoped to that folder
+- Expandable in-chat tool cards showing each tool's input, result, and error state
+- Animated Thinking and Typing indicators that follow model activity and streamed response text
+- Nova Code-style Markdown rendering in browser chat, including formatted tables, lists, headings, links, and code blocks
+- Opt-in `clawd web --reload` development mode with automatic server restart and browser refresh after Python source edits
 - Initial context injection pipeline for workspace snapshot, git status, and `CLAUDE.md`
 - Tests covering the new context system integration
 
 ### Changed
+- Browser chat now renders tool activity as compact, expandable groups in chronological order with assistant text
+- Browser composer polish: the prompt box grows with typed content instead of showing a resize grabber, and the card highlights on focus
+- Saved chats are written atomically, and a truncated or corrupt session file no longer breaks the browser session list
 - Skill frontmatter parsing now supports inline list syntax such as `arguments: [path]`
 - README and contributor docs now prefer `uv`-based setup instructions
 - Documentation now distinguishes provider-level streaming interfaces from the current turn-based CLI output
+
+### Removed
+- Redundant model text from the browser topbar and sidebar footer, and the decorative avatar squares beside assistant replies
 
 ## [0.1.0] - 2026-04-01
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -57,9 +58,63 @@ class SkillRegistry:
 
 _REGISTRY = SkillRegistry()
 
+# The web app serves requests on multiple threads (`ThreadingHTTPServer` +
+# one thread per chat job) while the CLI is single-threaded. Every public
+# entry point below mutates or reads `_REGISTRY`, so they all take this lock.
+# Re-entrant because `find_skill` may be called from inside `get_all_skills`.
+_LOCK = threading.RLock()
+
+
+def _load_all_into(registry: SkillRegistry, *, project_root, user_skills_dir) -> None:
+    """Populate ``registry`` with every discoverable skill, lowest precedence first."""
+    if user_skills_dir is not None:
+        user_dirs = [Path(user_skills_dir).expanduser().resolve()]
+    else:
+        user_dirs = _candidate_user_skills_dirs()
+    for user_dir in user_dirs:
+        for s in load_skills_from_dir(user_dir, loaded_from="user"):
+            registry.register(s)
+
+    managed_env = os.environ.get("CLAWD_MANAGED_SKILLS_DIR")
+    if managed_env:
+        managed_dir = Path(managed_env).expanduser().resolve()
+        for s in load_skills_from_dir(managed_dir, loaded_from="managed"):
+            registry.register(s)
+
+    if project_root is not None:
+        pr = Path(project_root).expanduser().resolve()
+        proj_dirs = []
+        main_path = pr / ".clawd" / "skills"
+        compat_path = pr / ".claude" / "skills"
+        proj_dirs.append(main_path)
+        if compat_path != main_path:
+            proj_dirs.append(compat_path)
+        for pr_dir in proj_dirs:
+            for s in load_skills_from_dir(pr_dir, loaded_from="project"):
+                registry.register(s)
+
 
 def clear_skill_registry() -> None:
-    _REGISTRY.clear()
+    with _LOCK:
+        _REGISTRY.clear()
+
+
+def find_skill(
+    name: str,
+    *,
+    project_root: str | Path | None = None,
+    user_skills_dir: str | Path | None = None,
+) -> Optional[PromptSkill]:
+    """Load skills and return the one matching ``name``, or ``None``.
+
+    Unlike :func:`get_all_skills` this reads from a private registry rather than
+    the shared module-level one, so concurrent callers cannot observe another
+    thread's in-progress load. Prefer this wherever a single skill is needed.
+    """
+    with _LOCK:
+        local = SkillRegistry()
+        _load_all_into(local, project_root=project_root, user_skills_dir=user_skills_dir)
+        return local.get(name)
 
 
 def load_skills_from_dir(base_dir: str | Path, *, loaded_from: str = "skills") -> List[PromptSkill]:
@@ -130,38 +185,19 @@ def get_all_skills(
     project_root: str | Path | None = None,
     user_skills_dir: str | Path | None = None,
 ) -> Sequence[PromptSkill]:
-    clear_skill_registry()
-    if user_skills_dir is not None:
-        user_dirs = [Path(user_skills_dir).expanduser().resolve()]
-    else:
-        user_dirs = _candidate_user_skills_dirs()
-    for user_dir in user_dirs:
-        for s in load_skills_from_dir(user_dir, loaded_from="user"):
-            _REGISTRY.register(s)
-
-    managed_env = os.environ.get("CLAWD_MANAGED_SKILLS_DIR")
-    if managed_env:
-        managed_dir = Path(managed_env).expanduser().resolve()
-        for s in load_skills_from_dir(managed_dir, loaded_from="managed"):
-            _REGISTRY.register(s)
-
-    if project_root is not None:
-        pr = Path(project_root).expanduser().resolve()
-        proj_dirs = []
-        main_path = pr / ".clawd" / "skills"
-        compat_path = pr / ".claude" / "skills"
-        proj_dirs.append(main_path)
-        if compat_path != main_path:
-            proj_dirs.append(compat_path)
-        for pr_dir in proj_dirs:
-            for s in load_skills_from_dir(pr_dir, loaded_from="project"):
-                _REGISTRY.register(s)
-
-    return _REGISTRY.list()
+    with _LOCK:
+        _REGISTRY.clear()
+        _load_all_into(
+            _REGISTRY,
+            project_root=project_root,
+            user_skills_dir=user_skills_dir,
+        )
+        return _REGISTRY.list()
 
 
 def get_registered_skill(name: str) -> Optional[PromptSkill]:
-    return _REGISTRY.get(name)
+    with _LOCK:
+        return _REGISTRY.get(name)
 
 
 def _extract_description(body: str) -> Optional[str]:

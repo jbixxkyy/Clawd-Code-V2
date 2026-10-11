@@ -27,6 +27,8 @@ Examples:
   clawd --version          Show version
   clawd login              Configure API keys
   clawd config             Show current configuration
+  clawd web                Start the browser app for this workspace
+  clawd web --reload       Restart the browser app automatically after source edits
   clawd --stream           Start REPL with live response rendering
   clawd                    Start interactive REPL
 """
@@ -56,6 +58,21 @@ Examples:
     # config subcommand
     config_parser = subparsers.add_parser('config', help='Show current configuration')
 
+    # web subcommand
+    web_parser = subparsers.add_parser('web', help='Start the browser app for this workspace')
+    web_parser.add_argument(
+        '--port',
+        type=int,
+        default=8765,
+        help='Port for the local-network web app (default: 8765)',
+    )
+    web_parser.add_argument(
+        '--reload',
+        action='store_true',
+        help='Restart the server and refresh connected browsers after Clawd source edits',
+    )
+    web_parser.add_argument('--_reload-worker', action='store_true', help=argparse.SUPPRESS)
+
     args = parser.parse_args()
 
     # Handle --version
@@ -73,6 +90,15 @@ Examples:
         return handle_login()
     elif args.command == 'config':
         return show_config()
+    elif args.command == 'web':
+        from src.web_app import run_web_app
+
+        return run_web_app(
+            workspace=Path.cwd(),
+            port=args.port,
+            reload=args.reload,
+            reload_worker=args._reload_worker,
+        )
 
     # Default: start REPL
     return start_repl(stream=args.stream)

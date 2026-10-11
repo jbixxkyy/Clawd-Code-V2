@@ -100,16 +100,30 @@ class ToolEvent:
     error: str | None = None
 
 
+class AgentLoopCancelled(Exception):
+    """Raised when a caller requests the running agent loop to stop.
+
+    Carries any text that was already streamed for the aborted turn so callers
+    can persist or display the partial response.
+    """
+
+    def __init__(self, partial_text: str = ""):
+        super().__init__("Agent loop cancelled")
+        self.partial_text = partial_text
+
+
 @dataclass(frozen=True)
 class AgentLoopResult:
     """Result of running the agent loop."""
     response_text: str
     usage: dict[str, Any] | None = None  # {"input_tokens": int, "output_tokens": int}
     num_turns: int = 0
+    cancelled: bool = False
 
 
 ToolEventHandler = Callable[[ToolEvent], None]
 TextChunkHandler = Callable[[str], None]
+ActivityHandler = Callable[[str], None]
 
 
 def _safe_call_handler(handler: ToolEventHandler | None, event: ToolEvent) -> None:
@@ -119,6 +133,25 @@ def _safe_call_handler(handler: ToolEventHandler | None, event: ToolEvent) -> No
         handler(event)
     except Exception:
         return
+
+
+def _safe_call_activity_handler(handler: ActivityHandler | None, activity: str) -> None:
+    if handler is None:
+        return
+    try:
+        handler(activity)
+    except Exception:
+        return
+
+
+def _stop_requested(should_stop: Callable[[], bool] | None) -> bool:
+    """Check a caller-supplied stop hook without letting it break the loop."""
+    if should_stop is None:
+        return False
+    try:
+        return bool(should_stop())
+    except Exception:
+        return False
 
 
 def _emit_text_chunks(handler: TextChunkHandler | None, text: str, *, chunk_size: int = 12) -> None:
@@ -158,6 +191,9 @@ def _call_provider_for_turn(
             return response, True
         except NotImplementedError:
             pass
+        except AgentLoopCancelled:
+            # Cancellation must abort the turn, not fall back to a blocking call.
+            raise
         except Exception:
             # Preserve existing stable behavior if streaming is unsupported or fails.
             pass
@@ -237,6 +273,34 @@ def summarize_tool_use(name: str, tool_input: dict[str, Any]) -> str:
 
 
 
+def _add_cancelled_tool_results(
+    *,
+    conversation: Conversation,
+    provider: BaseProvider,
+    openai_messages: list[dict[str, Any]],
+    pending_tool_uses: list[dict[str, Any]],
+    note: str,
+) -> None:
+    """Close out tool calls that will never run so the next turn stays valid.
+
+    Both message formats require every tool call to be answered; without this,
+    stopping between the model reply and tool execution would make the follow-up
+    API request fail.
+    """
+    for tool_use in pending_tool_uses:
+        tool_id = tool_use.get("id") if isinstance(tool_use, dict) else None
+        if not isinstance(tool_id, str):
+            continue
+        if _is_anthropic_provider(provider):
+            conversation.add_tool_result_message(tool_id, note, is_error=True)
+        else:
+            openai_messages.append({
+                "role": "tool",
+                "tool_call_id": tool_id,
+                "content": note,
+            })
+
+
 def run_agent_loop(
     conversation: Conversation,
     provider: BaseProvider,
@@ -247,6 +311,8 @@ def run_agent_loop(
     verbose: bool = False,
     on_event: ToolEventHandler | None = None,
     on_text_chunk: TextChunkHandler | None = None,
+    on_activity: ActivityHandler | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> AgentLoopResult:
     """Run agent loop: LLM -> tools -> LLM until no more tools or max turns.
 
@@ -260,9 +326,13 @@ def run_agent_loop(
         verbose: Whether to print tool calls/results
         on_event: Optional callback for tool events
         on_text_chunk: Optional callback for incremental user-visible text chunks
+        on_activity: Optional callback when requesting the next model response
+        should_stop: Optional callback returning True to stop the loop at the
+            next safe point (between turns, between tools, or mid-stream)
 
     Returns:
-        AgentLoopResult with final text response, usage info, and turn count
+        AgentLoopResult with final text response, usage info, and turn count.
+        ``cancelled`` is True when the loop stopped early via ``should_stop``.
     """
     # Convert tools to schemas (Anthropic format)
     tool_schemas = []
@@ -292,8 +362,28 @@ def run_agent_loop(
     # Track usage across all turns
     total_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
     turn_count = 0
+    streamed_text_parts: list[str] = []
+
+    def _cancelled_result() -> AgentLoopResult:
+        return AgentLoopResult(
+            response_text="".join(streamed_text_parts),
+            usage=total_usage if total_usage["input_tokens"] > 0 or total_usage["output_tokens"] > 0 else None,
+            num_turns=turn_count,
+            cancelled=True,
+        )
+
+    def guarded_text_chunk(text: str) -> None:
+        """Forward streamed text and abort mid-stream once a stop is requested."""
+        if text:
+            streamed_text_parts.append(text)
+        if on_text_chunk is not None:
+            on_text_chunk(text)
+        if _stop_requested(should_stop):
+            raise AgentLoopCancelled("".join(streamed_text_parts))
 
     for turn in range(max_turns):
+        if _stop_requested(should_stop):
+            return _cancelled_result()
         if _is_anthropic_provider(provider):
             api_messages = conversation.get_messages()
         else:
@@ -306,13 +396,21 @@ def run_agent_loop(
         else:
             if turn == 0:
                 api_messages = [{"role": "system", "content": effective_system_prompt}, *api_messages]
-        response, streamed_live_text = _call_provider_for_turn(
-            provider=provider,
-            api_messages=api_messages,
-            call_kwargs=call_kwargs,
-            stream=stream,
-            on_text_chunk=on_text_chunk,
-        )
+        _safe_call_activity_handler(on_activity, "thinking")
+        try:
+            response, streamed_live_text = _call_provider_for_turn(
+                provider=provider,
+                api_messages=api_messages,
+                call_kwargs=call_kwargs,
+                stream=stream,
+                on_text_chunk=guarded_text_chunk,
+            )
+        except AgentLoopCancelled:
+            # Keep the partial reply so the conversation history stays coherent.
+            partial_text = "".join(streamed_text_parts)
+            if partial_text.strip():
+                conversation.add_assistant_message(partial_text)
+            return _cancelled_result()
         turn_count += 1
 
         # Collect usage info
@@ -365,7 +463,7 @@ def run_agent_loop(
         if not tool_uses:
             # No more tools, done
             if stream and final_assistant_content and not streamed_live_text:
-                _emit_text_chunks(on_text_chunk, final_assistant_content)
+                _emit_text_chunks(guarded_text_chunk, final_assistant_content)
             if (final_assistant_content or "").strip() == "" and last_user_visible_message is not None:
                 return AgentLoopResult(
                     response_text=last_user_visible_message,
@@ -378,8 +476,19 @@ def run_agent_loop(
                 num_turns=turn_count,
             )
 
+        send_user_message: str | None = None
+
         # Call each tool
-        for tool_use in tool_uses:
+        for tool_index, tool_use in enumerate(tool_uses):
+            if _stop_requested(should_stop):
+                _add_cancelled_tool_results(
+                    conversation=conversation,
+                    provider=provider,
+                    openai_messages=openai_messages,
+                    pending_tool_uses=tool_uses[tool_index:],
+                    note="Stopped by the user before this tool ran.",
+                )
+                return _cancelled_result()
             tool_id = tool_use["id"]
             tool_name = tool_use["name"]
             tool_input = tool_use["input"]
@@ -403,6 +512,7 @@ def run_agent_loop(
                     msg = result_output.get("message")
                     if isinstance(msg, str):
                         last_user_visible_message = msg
+                        send_user_message = msg
                 if tool_name.lower() == "structuredoutput" and isinstance(result_output, dict):
                     payload = result_output.get("structured_output")
                     try:
@@ -459,6 +569,15 @@ def run_agent_loop(
                         "tool_call_id": tool_id,
                         "content": error_str
                     })
+
+        if send_user_message is not None:
+            conversation.add_assistant_message(send_user_message)
+            _emit_text_chunks(guarded_text_chunk, send_user_message)
+            return AgentLoopResult(
+                response_text=send_user_message,
+                usage=total_usage if total_usage["input_tokens"] > 0 or total_usage["output_tokens"] > 0 else None,
+                num_turns=turn_count,
+            )
 
     # Reached max turns
     return AgentLoopResult(
